@@ -22,8 +22,9 @@ const REFRESH_INTERVAL = Number(
 
 async function fetcher(url: string): Promise<AgencyData> {
   const res = await fetch(url);
-  if (!res.ok) throw new Error("Failed to fetch");
-  return res.json();
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.error ?? `Error ${res.status}`);
+  return json;
 }
 
 export function AgencyDashboard() {
@@ -33,7 +34,7 @@ export function AgencyDashboard() {
 
   const url = `/api/data?clientId=agency&startDate=${dateRange.startDate}&endDate=${dateRange.endDate}`;
 
-  const { data, isLoading, mutate } = useSWR<AgencyData>(
+  const { data, error, isLoading, mutate } = useSWR<AgencyData>(
     [url, refreshKey],
     ([u]) => fetcher(u as string),
     { refreshInterval: REFRESH_INTERVAL }
@@ -71,6 +72,13 @@ export function AgencyDashboard() {
         {isLoading && !data && (
           <div className="flex items-center justify-center h-64">
             <div className="w-6 h-6 border-2 border-neutral-300 dark:border-neutral-700 border-t-neutral-900 dark:border-t-white rounded-full animate-spin" />
+          </div>
+        )}
+
+        {error && (
+          <div className="rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 p-5">
+            <p className="text-sm font-medium text-red-700 dark:text-red-400">Error al cargar datos</p>
+            <p className="mt-1 text-xs text-red-500 dark:text-red-500 font-mono">{error.message}</p>
           </div>
         )}
 
