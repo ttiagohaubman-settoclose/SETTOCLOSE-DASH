@@ -67,8 +67,12 @@ export async function GET(req: NextRequest) {
       const clients = await getClients();
 
       // Fetch Meta (always) and GHL contacts (best-effort) in parallel
+      let ghlErrorMsg: string | undefined;
       const [ghlResult, ...metaResults] = await Promise.all([
-        getAllContacts(dateRange).catch(() => null),
+        getAllContacts(dateRange).catch((e) => {
+          ghlErrorMsg = e instanceof Error ? e.message : "GHL error";
+          return null;
+        }),
         ...clients.map((c) => getMetaMetrics(c.adAccountId, dateRange)),
       ]);
 
@@ -97,13 +101,14 @@ export async function GET(req: NextRequest) {
       );
       totals.roas = totals.spend > 0 ? totals.cashCollected / totals.spend : 0;
 
-      const agencyData: AgencyData = {
+      const agencyData: AgencyData & { ghlError?: string } = {
         clients: clientDataArr,
         totals,
         lastUpdated: new Date().toISOString(),
+        ...(ghlErrorMsg ? { ghlError: ghlErrorMsg } : {}),
       };
 
-      await cacheSet(key, agencyData);
+      if (!ghlErrorMsg) await cacheSet(key, agencyData);
       return NextResponse.json(agencyData);
     }
 

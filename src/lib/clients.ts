@@ -23,7 +23,7 @@ const DEFAULT_CLIENTS: Client[] = [
     name: "Danelly",
     office: "North Carolina",
     ghlTag: "nc leads - danelly",
-    adAccountId: "1482791790226418",
+    adAccountId: "1569261187694774",
     payout: 750,
   },
   {
