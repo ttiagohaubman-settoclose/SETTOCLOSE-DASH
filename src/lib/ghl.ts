@@ -3,6 +3,7 @@ import { cacheGet, cacheSet } from "./redis";
 
 const GHL_BASE = "https://services.leadconnectorhq.com";
 const GHL_VERSION = "2021-07-28";
+const TIMEOUT_MS = 6000; // 6s — stay under Vercel's 10s limit
 
 interface GHLContact {
   id: string;
@@ -13,23 +14,6 @@ interface GHLContact {
 interface GHLContactsResponse {
   contacts: GHLContact[];
   meta?: { startAfterId?: string };
-}
-
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-async function fetchWithRetry(url: string, options: RequestInit, retries = 4): Promise<Response> {
-  for (let i = 0; i <= retries; i++) {
-    const res = await fetch(url, options);
-    if (res.status !== 429) return res;
-    // exponential backoff: 2s, 4s, 8s, 16s
-    const wait = Math.pow(2, i + 1) * 1000;
-    console.warn(`GHL 429 rate limit, retrying in ${wait}ms (attempt ${i + 1}/${retries})`);
-    await sleep(wait);
-  }
-  // final attempt
-  return fetch(url, options);
 }
 
 async function fetchPage(
@@ -46,24 +30,29 @@ async function fetchPage(
   });
   if (startAfterId) params.set("startAfterId", startAfterId);
 
-  const res = await fetchWithRetry(
-    `${GHL_BASE}/contacts/?${params.toString()}`,
-    {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+  try {
+    const res = await fetch(`${GHL_BASE}/contacts/?${params.toString()}`, {
+      signal: controller.signal,
       headers: {
         Authorization: `Bearer ${token}`,
         Version: GHL_VERSION,
         "Content-Type": "application/json",
       },
       next: { revalidate: 0 },
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`GHL API error ${res.status}: ${text}`);
     }
-  );
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`GHL API error ${res.status}: ${text}`);
+    return res.json();
+  } finally {
+    clearTimeout(timer);
   }
-
-  return res.json();
 }
 
 async function fetchAllContactsFromGHL(dateRange: DateRange): Promise<GHLContact[]> {
@@ -95,8 +84,7 @@ export async function getAllContacts(dateRange: DateRange): Promise<GHLContact[]
   if (cached) return cached;
 
   const contacts = await fetchAllContactsFromGHL(dateRange);
-  // Cache for 10 minutes to aggressively avoid rate limits
-  await cacheSet(key, contacts, 600);
+  await cacheSet(key, contacts, 600); // cache 10 min
   return contacts;
 }
 
@@ -109,15 +97,15 @@ export async function getGHLMetrics(
   const contacts = (allContacts ?? await getAllContacts(dateRange))
     .filter((c) => c.tags.includes(clientTag));
 
-  const totalLeads     = contacts.length;
-  const scheduled      = contacts.filter((c) => c.tags.includes("scheduled")).length;
-  const showed         = contacts.filter((c) => c.tags.includes("showed")).length;
-  const closed         = contacts.filter((c) => c.tags.includes("venta")).length;
-  const paid           = contacts.filter((c) => c.tags.includes("pagada")).length;
-  const showRate       = scheduled > 0 ? (showed / scheduled) * 100 : null;
-  const closeRate      = scheduled > 0 ? (closed / scheduled) * 100 : 0;
-  const revenue        = closed * payout;
-  const cashCollected  = paid * payout;
+  const totalLeads    = contacts.length;
+  const scheduled     = contacts.filter((c) => c.tags.includes("scheduled")).length;
+  const showed        = contacts.filter((c) => c.tags.includes("showed")).length;
+  const closed        = contacts.filter((c) => c.tags.includes("venta")).length;
+  const paid          = contacts.filter((c) => c.tags.includes("pagada")).length;
+  const showRate      = scheduled > 0 ? (showed / scheduled) * 100 : null;
+  const closeRate     = scheduled > 0 ? (closed / scheduled) * 100 : 0;
+  const revenue       = closed * payout;
+  const cashCollected = paid * payout;
 
   return { totalLeads, scheduled, showed, closed, paid, showRate, closeRate, revenue, cashCollected };
 }

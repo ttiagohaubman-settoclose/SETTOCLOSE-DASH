@@ -49,10 +49,18 @@ export async function getMetaMetrics(
     access_token: token!,
   });
 
-  const res = await fetch(
-    `${META_BASE}/act_${adAccountId}/insights?${params.toString()}`,
-    { next: { revalidate: 0 } }
-  );
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+
+  let res: Response;
+  try {
+    res = await fetch(
+      `${META_BASE}/act_${adAccountId}/insights?${params.toString()}`,
+      { signal: controller.signal, next: { revalidate: 0 } }
+    );
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (!res.ok) {
     const text = await res.text();
