@@ -3,35 +3,12 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { getClientById, getClients } from "@/lib/clients";
 import { getMetaMetrics } from "@/lib/meta";
-import { getGHLMetrics } from "@/lib/ghl";
+import { getGHLMetrics, getAllContacts } from "@/lib/ghl";
 import { cacheGet, cacheSet, cacheDel } from "@/lib/redis";
 import type { ClientData, AgencyData, DateRange } from "@/types";
 
 function cacheKey(clientId: string, dateRange: DateRange) {
   return `cache:data:${clientId}:${dateRange.startDate}:${dateRange.endDate}`;
-}
-
-async function fetchClientData(
-  clientId: string,
-  dateRange: DateRange
-): Promise<ClientData> {
-  const client = await getClientById(clientId);
-  if (!client) throw new Error(`Client not found: ${clientId}`);
-
-  const [meta, ghl] = await Promise.all([
-    getMetaMetrics(client.adAccountId, dateRange),
-    getGHLMetrics(client.ghlTag, client.payout, dateRange),
-  ]);
-
-  const roas = meta.spend > 0 ? ghl.cashCollected / meta.spend : 0;
-
-  return {
-    clientId,
-    meta,
-    ghl,
-    roas,
-    lastUpdated: new Date().toISOString(),
-  };
 }
 
 export async function GET(req: NextRequest) {
@@ -53,18 +30,14 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // Client users can only access their own data
-  if (
-    session.user.role === "client" &&
-    clientId !== session.user.clientId
-  ) {
+  if (session.user.role === "client" && clientId !== session.user.clientId) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const dateRange: DateRange = { startDate, endDate };
 
   try {
-    // Agency view: all clients
+    // ── Agency view ──────────────────────────────────────────────
     if (!clientId || clientId === "agency") {
       if (session.user.role !== "admin") {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
@@ -79,8 +52,21 @@ export async function GET(req: NextRequest) {
       }
 
       const clients = await getClients();
-      const clientDataArr = await Promise.all(
-        clients.map((c) => fetchClientData(c.id, dateRange))
+
+      // Fetch GHL contacts ONCE for all clients, Meta in parallel per account
+      const [allContacts, ...metaResults] = await Promise.all([
+        getAllContacts(dateRange),
+        ...clients.map((c) => getMetaMetrics(c.adAccountId, dateRange)),
+      ]);
+
+      // Build each client's data reusing the already-fetched contacts
+      const clientDataArr: ClientData[] = await Promise.all(
+        clients.map(async (c, i) => {
+          const meta = metaResults[i];
+          const ghl = await getGHLMetrics(c.ghlTag, c.payout, dateRange, allContacts as never);
+          const roas = meta.spend > 0 ? ghl.cashCollected / meta.spend : 0;
+          return { clientId: c.id, meta, ghl, roas, lastUpdated: new Date().toISOString() };
+        })
       );
 
       const totals = clientDataArr.reduce(
@@ -107,7 +93,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(agencyData);
     }
 
-    // Single client view
+    // ── Single client view ───────────────────────────────────────
     const key = cacheKey(clientId, dateRange);
     if (!refresh) {
       const cached = await cacheGet<ClientData>(key);
@@ -116,7 +102,17 @@ export async function GET(req: NextRequest) {
       await cacheDel(key);
     }
 
-    const data = await fetchClientData(clientId, dateRange);
+    const client = await getClientById(clientId);
+    if (!client) throw new Error(`Client not found: ${clientId}`);
+
+    const [meta, ghl] = await Promise.all([
+      getMetaMetrics(client.adAccountId, dateRange),
+      getGHLMetrics(client.ghlTag, client.payout, dateRange),
+    ]);
+
+    const roas = meta.spend > 0 ? ghl.cashCollected / meta.spend : 0;
+    const data: ClientData = { clientId, meta, ghl, roas, lastUpdated: new Date().toISOString() };
+
     await cacheSet(key, data);
     return NextResponse.json(data);
   } catch (err) {
