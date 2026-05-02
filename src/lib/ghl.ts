@@ -80,11 +80,14 @@ async function fetchAllContactsFromGHL(dateRange: DateRange): Promise<GHLContact
 
 export async function getAllContacts(dateRange: DateRange): Promise<GHLContact[]> {
   const key = `ghl:contacts:${dateRange.startDate}:${dateRange.endDate}`;
+
+  // Always check Redis first — cron job keeps this warm
   const cached = await cacheGet<GHLContact[]>(key);
   if (cached) return cached;
 
+  // Fallback: fetch from GHL directly (only on cache miss / first load)
   const contacts = await fetchAllContactsFromGHL(dateRange);
-  await cacheSet(key, contacts, 600); // cache 10 min
+  await cacheSet(key, contacts, 7200); // 2 hours — cron refreshes hourly
   return contacts;
 }
 
