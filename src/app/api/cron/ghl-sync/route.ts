@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import { redisSet } from "@/lib/redis";
 import { format, subDays } from "date-fns";
 
@@ -57,13 +59,15 @@ async function fetchAllForRange(startDate: string, endDate: string): Promise<GHL
 }
 
 export async function GET(req: NextRequest) {
-  // Vercel calls this with Authorization header in cron context
+  // Allow: Vercel cron (bearer secret) OR logged-in admin
   const authHeader = req.headers.get("authorization");
-  if (
-    process.env.NODE_ENV === "production" &&
-    authHeader !== `Bearer ${process.env.CRON_SECRET}`
-  ) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const isCron = authHeader === `Bearer ${process.env.CRON_SECRET}`;
+
+  if (!isCron) {
+    const session = await getServerSession(authOptions);
+    if (!session?.user || session.user.role !== "admin") {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
   }
 
   const today = new Date();

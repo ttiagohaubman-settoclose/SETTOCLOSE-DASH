@@ -5,6 +5,7 @@ import { getClients } from "@/lib/clients";
 import { redisKeys, redisGet } from "@/lib/redis";
 import { ClientsManager } from "@/components/settings/ClientsManager";
 import { UsersManager } from "@/components/settings/UsersManager";
+import { GHLSync } from "@/components/settings/GHLSync";
 import type { User } from "@/types";
 
 export default async function SettingsPage() {
@@ -38,6 +39,7 @@ export default async function SettingsPage() {
       </header>
 
       <main className="flex-1 px-8 py-6 space-y-8 max-w-2xl">
+        <GHLSync />
         <ClientsManager initialClients={clients} />
         <UsersManager initialUsers={users} clients={clients} />
       </main>
