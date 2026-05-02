@@ -5,10 +5,26 @@ import { getClientById, getClients } from "@/lib/clients";
 import { getMetaMetrics } from "@/lib/meta";
 import { getGHLMetrics, getAllContacts } from "@/lib/ghl";
 import { cacheGet, cacheSet, cacheDel } from "@/lib/redis";
-import type { ClientData, AgencyData, DateRange } from "@/types";
+import type { ClientData, AgencyData, DateRange, GHLMetrics } from "@/types";
 
 function cacheKey(clientId: string, dateRange: DateRange) {
   return `cache:data:${clientId}:${dateRange.startDate}:${dateRange.endDate}`;
+}
+
+const EMPTY_GHL: GHLMetrics = {
+  totalLeads: 0, scheduled: 0, showed: 0, closed: 0, paid: 0,
+  showRate: null, closeRate: 0, revenue: 0, cashCollected: 0,
+};
+
+async function safeGHL(
+  clientTag: string, payout: number, dateRange: DateRange, allContacts?: never[]
+): Promise<{ ghl: GHLMetrics; ghlError?: string }> {
+  try {
+    const ghl = await getGHLMetrics(clientTag, payout, dateRange, allContacts);
+    return { ghl };
+  } catch (e) {
+    return { ghl: EMPTY_GHL, ghlError: e instanceof Error ? e.message : "GHL error" };
+  }
 }
 
 export async function GET(req: NextRequest) {
@@ -24,10 +40,7 @@ export async function GET(req: NextRequest) {
   const refresh = searchParams.get("refresh") === "true";
 
   if (!startDate || !endDate) {
-    return NextResponse.json(
-      { error: "startDate and endDate are required" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "startDate and endDate are required" }, { status: 400 });
   }
 
   if (session.user.role === "client" && clientId !== session.user.clientId) {
@@ -53,17 +66,18 @@ export async function GET(req: NextRequest) {
 
       const clients = await getClients();
 
-      // Fetch GHL contacts ONCE for all clients, Meta in parallel per account
-      const [allContacts, ...metaResults] = await Promise.all([
-        getAllContacts(dateRange),
+      // Fetch Meta (always) and GHL contacts (best-effort) in parallel
+      const [ghlResult, ...metaResults] = await Promise.all([
+        getAllContacts(dateRange).catch(() => null),
         ...clients.map((c) => getMetaMetrics(c.adAccountId, dateRange)),
       ]);
 
-      // Build each client's data reusing the already-fetched contacts
+      const allContacts = ghlResult ?? [];
+
       const clientDataArr: ClientData[] = await Promise.all(
         clients.map(async (c, i) => {
           const meta = metaResults[i];
-          const ghl = await getGHLMetrics(c.ghlTag, c.payout, dateRange, allContacts as never);
+          const { ghl } = await safeGHL(c.ghlTag, c.payout, dateRange, allContacts as never[]);
           const roas = meta.spend > 0 ? ghl.cashCollected / meta.spend : 0;
           return { clientId: c.id, meta, ghl, roas, lastUpdated: new Date().toISOString() };
         })
@@ -105,16 +119,23 @@ export async function GET(req: NextRequest) {
     const client = await getClientById(clientId);
     if (!client) throw new Error(`Client not found: ${clientId}`);
 
-    const [meta, ghl] = await Promise.all([
+    // Meta and GHL in parallel — GHL failure won't block Meta
+    const [meta, { ghl, ghlError }] = await Promise.all([
       getMetaMetrics(client.adAccountId, dateRange),
-      getGHLMetrics(client.ghlTag, client.payout, dateRange),
+      safeGHL(client.ghlTag, client.payout, dateRange),
     ]);
 
     const roas = meta.spend > 0 ? ghl.cashCollected / meta.spend : 0;
-    const data: ClientData = { clientId, meta, ghl, roas, lastUpdated: new Date().toISOString() };
+    const data: ClientData & { ghlError?: string } = {
+      clientId, meta, ghl, roas,
+      lastUpdated: new Date().toISOString(),
+      ...(ghlError ? { ghlError } : {}),
+    };
 
-    await cacheSet(key, data);
+    // Only cache if GHL succeeded (so next request retries GHL)
+    if (!ghlError) await cacheSet(key, data);
     return NextResponse.json(data);
+
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

@@ -13,11 +13,13 @@ import {
 } from "@/lib/utils";
 import type { ClientData, DateRange, DatePreset } from "@/types";
 
+type ClientDataWithError = ClientData & { ghlError?: string };
+
 const REFRESH_INTERVAL = Number(
   process.env.NEXT_PUBLIC_REFRESH_INTERVAL ?? 300000
 );
 
-async function fetcher(url: string): Promise<ClientData> {
+async function fetcher(url: string): Promise<ClientDataWithError> {
   const res = await fetch(url);
   const json = await res.json();
   if (!res.ok) throw new Error(json.error ?? `Error ${res.status}`);
@@ -41,7 +43,7 @@ export function ClientDashboard({
 
   const url = `/api/data?clientId=${clientId}&startDate=${dateRange.startDate}&endDate=${dateRange.endDate}`;
 
-  const { data, error, isLoading, mutate } = useSWR<ClientData>(
+  const { data, error, isLoading, mutate } = useSWR<ClientDataWithError>(
     [url, refreshKey],
     ([u]) => fetcher(u as string),
     { refreshInterval: REFRESH_INTERVAL }
@@ -90,6 +92,14 @@ export function ClientDashboard({
           <div className="rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 p-5">
             <p className="text-sm font-medium text-red-700 dark:text-red-400">Error al cargar datos</p>
             <p className="mt-1 text-xs text-red-500 dark:text-red-500 font-mono">{error.message}</p>
+          </div>
+        )}
+
+        {data?.ghlError && (
+          <div className="rounded-xl border border-yellow-200 dark:border-yellow-900 bg-yellow-50 dark:bg-yellow-950/30 px-4 py-3">
+            <p className="text-xs text-yellow-700 dark:text-yellow-400">
+              GHL no disponible — mostrando datos de Meta solamente. Se reintentará en el próximo refresh.
+            </p>
           </div>
         )}
 
