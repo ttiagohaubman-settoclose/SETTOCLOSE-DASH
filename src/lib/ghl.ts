@@ -19,10 +19,7 @@ interface GHLContactsResponse {
   };
 }
 
-async function fetchAllContacts(
-  tag: string,
-  dateRange: DateRange
-): Promise<GHLContact[]> {
+async function fetchAllContacts(dateRange: DateRange): Promise<GHLContact[]> {
   const token = process.env.GHL_API_TOKEN;
   const locationId = process.env.GHL_LOCATION_ID;
   const allContacts: GHLContact[] = [];
@@ -35,24 +32,20 @@ async function fetchAllContacts(
       limit: "100",
       startDate: `${dateRange.startDate}T00:00:00.000Z`,
       endDate: `${dateRange.endDate}T23:59:59.999Z`,
-      tags: tag,
     });
 
     if (startAfterId) {
       params.set("startAfterId", startAfterId);
     }
 
-    const res = await fetch(
-      `${GHL_BASE}/contacts/?${params.toString()}`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Version: GHL_VERSION,
-          "Content-Type": "application/json",
-        },
-        next: { revalidate: 0 },
-      }
-    );
+    const res = await fetch(`${GHL_BASE}/contacts/?${params.toString()}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Version: GHL_VERSION,
+        "Content-Type": "application/json",
+      },
+      next: { revalidate: 0 },
+    });
 
     if (!res.ok) {
       const text = await res.text();
@@ -74,12 +67,28 @@ async function fetchAllContacts(
   return allContacts;
 }
 
+// Cache all contacts per date range so multiple clients reuse the same fetch
+const contactsCache = new Map<string, GHLContact[]>();
+
+async function getContactsForRange(dateRange: DateRange): Promise<GHLContact[]> {
+  const key = `${dateRange.startDate}:${dateRange.endDate}`;
+  if (contactsCache.has(key)) return contactsCache.get(key)!;
+  const contacts = await fetchAllContacts(dateRange);
+  contactsCache.set(key, contacts);
+  // Clear after 5 minutes to avoid memory leak in long-running processes
+  setTimeout(() => contactsCache.delete(key), 300_000);
+  return contacts;
+}
+
 export async function getGHLMetrics(
   clientTag: string,
   payout: number,
   dateRange: DateRange
 ): Promise<GHLMetrics> {
-  const contacts = await fetchAllContacts(clientTag, dateRange);
+  const allContacts = await getContactsForRange(dateRange);
+
+  // Filter to contacts belonging to this client
+  const contacts = allContacts.filter((c) => c.tags.includes(clientTag));
 
   const totalLeads = contacts.length;
   const scheduled = contacts.filter((c) => c.tags.includes("scheduled")).length;
