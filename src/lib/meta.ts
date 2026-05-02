@@ -1,6 +1,8 @@
 import type { MetaMetrics, DateRange } from "@/types";
+import { cacheGet, cacheSet } from "./redis";
 
 const META_BASE = "https://graph.facebook.com/v19.0";
+const META_CACHE_TTL = 900; // 15 minutes
 
 interface MetaAction {
   action_type: string;
@@ -37,6 +39,10 @@ export async function getMetaMetrics(
   adAccountId: string,
   dateRange: DateRange
 ): Promise<MetaMetrics> {
+  const cacheKey = `meta:${adAccountId}:${dateRange.startDate}:${dateRange.endDate}`;
+  const cached = await cacheGet<MetaMetrics>(cacheKey);
+  if (cached) return cached;
+
   const token = process.env.META_ACCESS_TOKEN;
 
   const params = new URLSearchParams({
@@ -95,5 +101,7 @@ export async function getMetaMetrics(
   const leads = extractLeads(insight.actions);
   const cpl = leads > 0 ? spend / leads : 0;
 
-  return { spend, impressions, clicks, cpc, ctr, leads, cpl };
+  const metrics: MetaMetrics = { spend, impressions, clicks, cpc, ctr, leads, cpl };
+  await cacheSet(cacheKey, metrics, META_CACHE_TTL);
+  return metrics;
 }

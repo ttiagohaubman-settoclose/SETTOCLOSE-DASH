@@ -44,6 +44,18 @@ export async function getClients(): Promise<Client[]> {
     await redisSet(CLIENTS_KEY, DEFAULT_CLIENTS);
     return DEFAULT_CLIENTS;
   }
+
+  // Auto-fix any stale adAccountId that doesn't match the current defaults
+  let dirty = false;
+  for (const client of stored) {
+    const def = DEFAULT_CLIENTS.find((d) => d.id === client.id);
+    if (def && client.adAccountId !== def.adAccountId) {
+      client.adAccountId = def.adAccountId;
+      dirty = true;
+    }
+  }
+  if (dirty) await redisSet(CLIENTS_KEY, stored);
+
   return stored;
 }
 

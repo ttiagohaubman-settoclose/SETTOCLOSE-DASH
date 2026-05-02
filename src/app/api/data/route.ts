@@ -108,7 +108,8 @@ export async function GET(req: NextRequest) {
         ...(ghlErrorMsg ? { ghlError: ghlErrorMsg } : {}),
       };
 
-      if (!ghlErrorMsg) await cacheSet(key, agencyData);
+      // Short TTL on GHL failure so the next request retries GHL promptly
+      await cacheSet(key, agencyData, ghlErrorMsg ? 60 : undefined);
       return NextResponse.json(agencyData);
     }
 
@@ -137,8 +138,7 @@ export async function GET(req: NextRequest) {
       ...(ghlError ? { ghlError } : {}),
     };
 
-    // Only cache if GHL succeeded (so next request retries GHL)
-    if (!ghlError) await cacheSet(key, data);
+    await cacheSet(key, data, ghlError ? 60 : undefined);
     return NextResponse.json(data);
 
   } catch (err) {
